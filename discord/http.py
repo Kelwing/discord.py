@@ -657,7 +657,7 @@ class HTTPClient:
 
     def get_invite(self, invite_id):
         params = {
-            'with_counts': True
+            'with_counts': 'true'
         }
         return self.request(Route('GET', '/invite/{invite_id}', invite_id=invite_id), params=params)
 
