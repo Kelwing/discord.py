@@ -117,6 +117,8 @@ class Invite(Hashable):
             channel = Object(id=channel_id)
             guild.name = data['guild']['name']
             channel.name = data['channel']['name']
+            icon = data['guild']['icon']
+            splash = data['guild']['splash']
 
         data['guild'] = guild
         data['channel'] = channel
