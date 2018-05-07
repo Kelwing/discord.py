@@ -77,6 +77,10 @@ class Invite(Hashable):
         The user who created the invite.
     channel: :class:`abc.GuildChannel`
         The channel the invite is for.
+    member_count :class:`int`
+        The approximate member count for the guild the invite is for.
+    presence_count :class:`int`
+        The approximate online count for the guild the invite is for.
     """
 
 
