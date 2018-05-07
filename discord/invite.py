@@ -81,7 +81,8 @@ class Invite(Hashable):
 
 
     __slots__ = ( 'max_age', 'code', 'guild', 'revoked', 'created_at', 'uses',
-                  'temporary', 'max_uses', 'inviter', 'channel', '_state' )
+                  'temporary', 'max_uses', 'inviter', 'channel', '_state',
+                  'member_count', 'presence_count' )
 
     def __init__(self, *, state, data):
         self._state = state
@@ -97,6 +98,8 @@ class Invite(Hashable):
         inviter_data = data.get('inviter')
         self.inviter = None if inviter_data is None else self._state.store_user(inviter_data)
         self.channel = data.get('channel')
+        self.member_count = data.get('approximate_member_count')
+        self.presence_count = data.get('approximate_presence_count')
 
     @classmethod
     def from_incomplete(cls, *, state, data):
