@@ -24,8 +24,6 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-import asyncio
-
 from .utils import parse_time
 from .mixins import Hashable
 from .object import Object
@@ -84,9 +82,9 @@ class Invite(Hashable):
     """
 
 
-    __slots__ = ( 'max_age', 'code', 'guild', 'revoked', 'created_at', 'uses',
-                  'temporary', 'max_uses', 'inviter', 'channel', '_state',
-                  'member_count', 'presence_count' )
+    __slots__ = ('max_age', 'code', 'guild', 'revoked', 'created_at', 'uses',
+                 'temporary', 'max_uses', 'inviter', 'channel', '_state',
+                 'member_count', 'presence_count')
 
     def __init__(self, *, state, data):
         self._state = state
@@ -116,9 +114,14 @@ class Invite(Hashable):
             guild = Object(id=guild_id)
             channel = Object(id=channel_id)
             guild.name = data['guild']['name']
+
+            guild.splash = data['guild']['splash']
+            guild.splash_url = ''
+            if guild.splash:
+                guild.splash_url = 'https://cdn.discordapp.com/splashes/{0.id}/{0.splash}.jpg?size=2048'.format(guild)
+
             channel.name = data['channel']['name']
             guild.icon = data['guild']['icon']
-            guild.splash = data['guild']['splash']
 
         data['guild'] = guild
         data['channel'] = channel
