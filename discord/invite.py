@@ -27,6 +27,7 @@ DEALINGS IN THE SOFTWARE.
 from .utils import parse_time
 from .mixins import Hashable
 from .object import Object
+from .enums import try_enum, VerificationLevel
 
 class Invite(Hashable):
     """Represents a Discord :class:`Guild` or :class:`abc.GuildChannel` invite.
@@ -122,6 +123,8 @@ class Invite(Hashable):
 
             channel.name = data['channel']['name']
             guild.icon = data['guild']['icon']
+            guild.verification_level = try_enum(VerificationLevel, data['guild'].get('verification_level'))
+            guild.features = data['guild'].get('features', [])
 
         data['guild'] = guild
         data['channel'] = channel
