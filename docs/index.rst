@@ -39,6 +39,7 @@ Extensions
   :maxdepth: 3
 
   ext/commands/index.rst
+  ext/tasks/index.rst
 
 
 Additional Information
@@ -50,10 +51,9 @@ Additional Information
     discord
     faq
     whats_new
+    version_guarantees
 
 If you still can't find what you're looking for, try in one of the following pages:
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`
-

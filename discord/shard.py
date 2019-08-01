@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -43,6 +43,7 @@ class Shard:
     def __init__(self, ws, client):
         self.ws = ws
         self._client = client
+        self._dispatch = client.dispatch
         self.loop = self._client.loop
         self._current = self.loop.create_future()
         self._current.set_result(None) # we just need an already done future
@@ -79,6 +80,7 @@ class Shard:
             log.info('Got a request to RESUME the websocket at Shard ID %s.', self.id)
             coro = DiscordWebSocket.from_client(self._client, resume=True, shard_id=self.id,
                                                 session=self.ws.session_id, sequence=self.ws.sequence)
+            self._dispatch('disconnect')
             self.ws = await asyncio.wait_for(coro, timeout=180.0, loop=self.loop)
 
     def get_future(self):
@@ -100,11 +102,11 @@ class AutoShardedClient(Client):
     It is recommended to use this client only if you have surpassed at least
     1000 guilds.
 
-    If no :attr:`shard_count` is provided, then the library will use the
+    If no :attr:`.shard_count` is provided, then the library will use the
     Bot Gateway endpoint call to figure out how many shards to use.
 
     If a ``shard_ids`` parameter is given, then those shard IDs will be used
-    to launch the internal shards. Note that :attr:`shard_count` must be provided
+    to launch the internal shards. Note that :attr:`.shard_count` must be provided
     if this is used. By default, when omitted, the client will launch shards from
     0 to ``shard_count - 1``.
 
@@ -161,7 +163,7 @@ class AutoShardedClient(Client):
     def latency(self):
         """:class:`float`: Measures latency between a HEARTBEAT and a HEARTBEAT_ACK in seconds.
 
-        This operates similarly to :meth:`.Client.latency` except it uses the average
+        This operates similarly to :meth:`Client.latency` except it uses the average
         latency of every shard's latency. To get a list of shard latency, check the
         :attr:`latencies` property. Returns ``nan`` if there are no shards ready.
         """
@@ -192,7 +194,7 @@ class AutoShardedClient(Client):
 
         Parameters
         -----------
-        \*guilds
+        \*guilds: :class:`Guild`
             An argument list of guilds to request offline members for.
 
         Raises
@@ -219,6 +221,7 @@ class AutoShardedClient(Client):
 
         ws.token = self.http.token
         ws._connection = self._connection
+        ws._discord_parsers = self._connection.parsers
         ws._dispatch = self.dispatch
         ws.gateway = gateway
         ws.shard_id = shard_id
@@ -273,12 +276,12 @@ class AutoShardedClient(Client):
     async def close(self):
         """|coro|
 
-        Closes the connection to discord.
+        Closes the connection to Discord.
         """
         if self.is_closed():
             return
 
-        self._closed.set()
+        self._closed = True
 
         for vc in self.voice_clients:
             try:
@@ -311,13 +314,13 @@ class AutoShardedClient(Client):
         activity: Optional[Union[:class:`Game`, :class:`Streaming`, :class:`Activity`]]
             The activity being done. ``None`` if no currently active activity is done.
         status: Optional[:class:`Status`]
-            Indicates what status to change to. If None, then
+            Indicates what status to change to. If ``None``, then
             :attr:`Status.online` is used.
-        afk: bool
+        afk: :class:`bool`
             Indicates if you are going AFK. This allows the discord
             client to know how to handle push notifications better
             for you in case you are actually idle and not lying.
-        shard_id: Optional[int]
+        shard_id: Optional[:class:`int`]
             The shard_id to change the presence to. If not specified
             or ``None``, then it will change the presence of every
             shard the bot can see.

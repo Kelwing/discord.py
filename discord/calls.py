@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -38,7 +38,7 @@ class CallMessage:
 
     Attributes
     -----------
-    ended_timestamp: Optional[datetime.datetime]
+    ended_timestamp: Optional[:class:`datetime.datetime`]
         A naive UTC datetime object that represents the time that the call has ended.
     participants: List[:class:`User`]
         The list of users that are participating in this call.
@@ -53,7 +53,7 @@ class CallMessage:
 
     @property
     def call_ended(self):
-        """:obj:`bool`: Indicates if the call has ended."""
+        """:class:`bool`: Indicates if the call has ended."""
         return self.ended_timestamp is not None
 
     @property
@@ -70,7 +70,7 @@ class CallMessage:
 
         Returns
         ---------
-        datetime.timedelta
+        :class:`datetime.timedelta`
             The timedelta object representing the duration.
         """
         if self.ended_timestamp is None:
@@ -87,7 +87,7 @@ class GroupCall:
     -----------
     call: :class:`CallMessage`
         The call message associated with this group call.
-    unavailable: :obj:`bool`
+    unavailable: :class:`bool`
         Denotes if this group call is unavailable.
     ringing: List[:class:`User`]
         A list of users that are currently being rung to join the call.
@@ -122,7 +122,7 @@ class GroupCall:
 
     @property
     def connected(self):
-        """A property that returns the :obj:`list` of :class:`User` that are currently in this call."""
+        """List[:class:`User`]: A property that returns all users that are currently in this call."""
         ret = [u for u in self.channel.recipients if self.voice_state_for(u) is not None]
         me = self.channel.me
         if self.voice_state_for(me) is not None:

@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -26,17 +26,21 @@ DEALINGS IN THE SOFTWARE.
 
 import array
 import asyncio
+import collections.abc
+import unicodedata
 from base64 import b64encode
 from bisect import bisect_left
 import datetime
 from email.utils import parsedate_to_datetime
 import functools
 from inspect import isawaitable as _isawaitable
+from operator import attrgetter
 import json
-from re import split as re_split
+import re
 import warnings
 
 from .errors import InvalidArgument
+from .object import Object
 
 DISCORD_EPOCH = 1420070400000
 
@@ -76,9 +80,35 @@ def cached_slot_property(name):
         return CachedSlotProperty(name, func)
     return decorator
 
+class SequenceProxy(collections.abc.Sequence):
+    """Read-only proxy of a Sequence."""
+    def __init__(self, proxied):
+        self.__proxied = proxied
+
+    def __getitem__(self, idx):
+        return self.__proxied[idx]
+
+    def __len__(self):
+        return len(self.__proxied)
+
+    def __contains__(self, item):
+        return item in self.__proxied
+
+    def __iter__(self):
+        return iter(self.__proxied)
+
+    def __reversed__(self):
+        return reversed(self.__proxied)
+
+    def index(self, value, *args, **kwargs):
+        return self.__proxied.index(value, *args, **kwargs)
+
+    def count(self, value):
+        return self.__proxied.count(value)
+
 def parse_time(timestamp):
     if timestamp:
-        return datetime.datetime(*map(int, re_split(r'[^\d]', timestamp.replace('+00:00', ''))))
+        return datetime.datetime(*map(int, re.split(r'[^\d]', timestamp.replace('+00:00', ''))))
     return None
 
 def deprecated(instead=None):
@@ -103,14 +133,14 @@ def oauth_url(client_id, permissions=None, guild=None, redirect_uri=None):
 
     Parameters
     -----------
-    client_id : str
+    client_id: :class:`str`
         The client ID for your bot.
-    permissions : :class:`Permissions`
+    permissions: :class:`~discord.Permissions`
         The permissions you're requesting. If not given then you won't be requesting any
         permissions.
-    guild : :class:`Guild`
+    guild: :class:`~discord.Guild`
         The guild to pre-select in the authorization screen, if available.
-    redirect_uri : str
+    redirect_uri: :class:`str`
         An optional valid redirect URI.
     """
     url = 'https://discordapp.com/oauth2/authorize?client_id={}&scope=bot'.format(client_id)
@@ -125,20 +155,20 @@ def oauth_url(client_id, permissions=None, guild=None, redirect_uri=None):
 
 
 def snowflake_time(id):
-    """Returns the creation date in UTC of a discord id."""
+    """Returns the creation date in UTC of a Discord snowflake ID."""
     return datetime.datetime.utcfromtimestamp(((id >> 22) + DISCORD_EPOCH) / 1000)
 
 def time_snowflake(datetime_obj, high=False):
     """Returns a numeric snowflake pretending to be created at the given date.
 
-    When using as the lower end of a range, use time_snowflake(high=False) - 1 to be inclusive, high=True to be exclusive
-    When using as the higher end of a range, use time_snowflake(high=True) + 1 to be inclusive, high=False to be exclusive
+    When using as the lower end of a range, use ``time_snowflake(high=False) - 1`` to be inclusive, ``high=True`` to be exclusive
+    When using as the higher end of a range, use ``time_snowflake(high=True)`` + 1 to be inclusive, ``high=False`` to be exclusive
 
     Parameters
     -----------
-    datetime_obj
+    datetime_obj: :class:`datetime.datetime`
         A timezone-naive datetime object representing UTC time.
-    high
+    high: :class:`bool`
         Whether or not to set the lower 22 bit to high or low.
     """
     unix_seconds = (datetime_obj - type(datetime_obj)(1970, 1, 1)).total_seconds()
@@ -152,20 +182,17 @@ def find(predicate, seq):
 
         member = find(lambda m: m.name == 'Mighty', channel.guild.members)
 
-    would find the first :class:`Member` whose name is 'Mighty' and return it.
+    would find the first :class:`~discord.Member` whose name is 'Mighty' and return it.
     If an entry is not found, then ``None`` is returned.
 
-    This is different from `filter`_ due to the fact it stops the moment it finds
+    This is different from :func:`py:filter` due to the fact it stops the moment it finds
     a valid entry.
-
-
-    .. _filter: https://docs.python.org/3.6/library/functions.html#filter
 
     Parameters
     -----------
     predicate
         A function that returns a boolean-like result.
-    seq : iterable
+    seq: iterable
         The iterable to search through.
     """
 
@@ -177,7 +204,7 @@ def find(predicate, seq):
 def get(iterable, **attrs):
     r"""A helper that returns the first element in the iterable that meets
     all the traits passed in ``attrs``. This is an alternative for
-    :func:`discord.utils.find`.
+    :func:`~discord.utils.find`.
 
     When multiple attributes are specified, they are checked using
     logical AND, not logical OR. Meaning they have to meet every
@@ -218,19 +245,28 @@ def get(iterable, **attrs):
         Keyword arguments that denote attributes to search with.
     """
 
-    def predicate(elem):
-        for attr, val in attrs.items():
-            nested = attr.split('__')
-            obj = elem
-            for attribute in nested:
-                obj = getattr(obj, attribute)
+    # global -> local
+    _all = all
+    attrget = attrgetter
 
-            if obj != val:
-                return False
-        return True
+    # Special case the single element call
+    if len(attrs) == 1:
+        k, v = attrs.popitem()
+        pred = attrget(k.replace('__', '.'))
+        for elem in iterable:
+            if pred(elem) == v:
+                return elem
+        return None
 
-    return find(predicate, iterable)
+    converted = [
+        (attrget(attr.replace('__', '.')), value)
+        for attr, value in attrs.items()
+    ]
 
+    for elem in iterable:
+        if _all(pred(elem) == value for pred, value in converted):
+            return elem
+    return None
 
 def _unique(iterable):
     seen = set()
@@ -248,9 +284,9 @@ def _get_as_snowflake(data, key):
 def _get_mime_type_for_image(data):
     if data.startswith(b'\x89\x50\x4E\x47\x0D\x0A\x1A\x0A'):
         return 'image/png'
-    elif data.startswith(b'\xFF\xD8') and data.rstrip(b'\0').endswith(b'\xFF\xD9'):
+    elif data[6:10] in (b'JFIF', b'Exif'):
         return 'image/jpeg'
-    elif data.startswith(b'\x47\x49\x46\x38\x37\x61') or data.startswith(b'\x47\x49\x46\x38\x39\x61'):
+    elif data.startswith((b'\x47\x49\x46\x38\x37\x61', b'\x47\x49\x46\x38\x39\x61')):
         return 'image/gif'
     elif data.startswith(b'RIFF') and data[8:12] == b'WEBP':
         return 'image/webp'
@@ -287,14 +323,16 @@ async def async_all(gen, *, check=_isawaitable):
     return True
 
 async def sane_wait_for(futures, *, timeout, loop):
-    _, pending = await asyncio.wait(futures, timeout=timeout, loop=loop)
+    done, pending = await asyncio.wait(futures, timeout=timeout, return_when=asyncio.ALL_COMPLETED, loop=loop)
 
     if len(pending) != 0:
         raise asyncio.TimeoutError()
 
+    return done
+
 def valid_icon_size(size):
-    """Icons must be power of 2 within [16, 2048]."""
-    return not size & (size - 1) and size in range(16, 2049)
+    """Icons must be power of 2 within [16, 4096]."""
+    return not size & (size - 1) and size in range(16, 4097)
 
 class SnowflakeList(array.array):
     """Internal data storage class to efficiently store a list of snowflakes.
@@ -324,3 +362,108 @@ class SnowflakeList(array.array):
     def has(self, element):
         i = bisect_left(self, element)
         return i != len(self) and self[i] == element
+
+_IS_ASCII = re.compile(r'^[\x00-\x7f]+$')
+
+def _string_width(string, *, _IS_ASCII=_IS_ASCII):
+    """Returns string's width."""
+    match = _IS_ASCII.match(string)
+    if match:
+        return match.endpos
+
+    UNICODE_WIDE_CHAR_TYPE = 'WFA'
+    width = 0
+    func = unicodedata.east_asian_width
+    for char in string:
+        width += 2 if func(char) in UNICODE_WIDE_CHAR_TYPE else 1
+    return width
+
+def resolve_invite(invite):
+    """
+    Resolves an invite from a :class:`~discord.Invite`, URL or ID
+
+    Parameters
+    -----------
+    invite: Union[:class:`~discord.Invite`, :class:`~discord.Object`, :class:`str`]
+        The invite.
+
+    Returns
+    --------
+    :class:`str`
+        The invite code.
+    """
+    from .invite import Invite  # circular import
+    if isinstance(invite, Invite) or isinstance(invite, Object):
+        return invite.id
+    else:
+        rx = r'(?:https?\:\/\/)?discord(?:\.gg|app\.com\/invite)\/(.+)'
+        m = re.match(rx, invite)
+        if m:
+            return m.group(1)
+    return invite
+
+_MARKDOWN_ESCAPE_SUBREGEX = '|'.join(r'\{0}(?=([\s\S]*((?<!\{0})\{0})))'.format(c)
+                                     for c in ('*', '`', '_', '~', '|'))
+
+_MARKDOWN_ESCAPE_REGEX = re.compile(r'(?P<markdown>%s)' % _MARKDOWN_ESCAPE_SUBREGEX)
+
+def escape_markdown(text, *, as_needed=False, ignore_links=True):
+    r"""A helper function that escapes Discord's markdown.
+
+    Parameters
+    -----------
+    text: :class:`str`
+        The text to escape markdown from.
+    as_needed: :class:`bool`
+        Whether to escape the markdown characters as needed. This
+        means that it does not escape extraneous characters if it's
+        not necessary, e.g. ``**hello**`` is escaped into ``\*\*hello**``
+        instead of ``\*\*hello\*\*``. Note however that this can open
+        you up to some clever syntax abuse. Defaults to ``False``.
+    ignore_links: :class:`bool`
+        Whether to leave links alone when escaping markdown. For example,
+        if a URL in the text contains characters such as ``_`` then it will
+        be left alone. This option is not supported with ``as_needed``.
+        Defaults to ``True``.
+
+    Returns
+    --------
+    :class:`str`
+        The text with the markdown special characters escaped with a slash.
+    """
+
+    if not as_needed:
+        url_regex = r'(?P<url>(?:https?|steam)://(?:-\.)?(?:[^\s/?\.#-]+\.?)+(?:/[^\s]*)?)'
+        def replacement(match):
+            groupdict = match.groupdict()
+            is_url = groupdict.get('url')
+            if is_url:
+                return is_url
+            return '\\' + groupdict['markdown']
+
+        regex = r'(?P<markdown>[_\\~|\*`]|>(?:>>)?\s)'
+        if ignore_links:
+            regex = '(?:%s|%s)' % (url_regex, regex)
+        return re.sub(regex, replacement, text)
+    else:
+        text = re.sub(r'\\', r'\\\\', text)
+        return _MARKDOWN_ESCAPE_REGEX.sub(r'\\\1', text)
+
+def escape_mentions(text):
+    """A helper function that escapes everyone, here, role, and user mentions.
+
+    .. note::
+
+        This does not include channel mentions.
+
+    Parameters
+    -----------
+    text: :class:`str`
+        The text to escape mentions from.
+
+    Returns
+    --------
+    :class:`str`
+        The text with the mentions removed.
+    """
+    return re.sub(r'@(everyone|here|[!&]?[0-9]{17,21})', '@\u200b\\1', text)

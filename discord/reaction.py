@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -54,7 +54,7 @@ class Reaction:
 
     Attributes
     -----------
-    emoji: :class:`Emoji` or :class:`str`
+    emoji: Union[:class:`Emoji`, :class:`str`]
         The reaction emoji. May be a custom emoji, or a unicode emoji.
     count: :class:`int`
         Number of times this reaction was made
@@ -93,25 +93,39 @@ class Reaction:
     def __repr__(self):
         return '<Reaction emoji={0.emoji!r} me={0.me} count={0.count}>'.format(self)
 
+    async def remove(self, user):
+        """|coro|
+
+        Remove the reaction by the provided :class:`User` from the message.
+
+        If the reaction is not your own (i.e. ``user`` parameter is not you) then
+        the :attr:`~Permissions.manage_messages` permission is needed.
+
+        The ``user`` parameter must represent a user or member and meet
+        the :class:`abc.Snowflake` abc.
+
+        Parameters
+        -----------
+        user: :class:`abc.Snowflake`
+             The user or member from which to remove the reaction.
+
+        Raises
+        -------
+        HTTPException
+            Removing the reaction failed.
+        Forbidden
+            You do not have the proper permissions to remove the reaction.
+        NotFound
+            The user you specified, or the reaction's message was not found.
+        """
+
+        await self.message.remove_reaction(self.emoji, user)
+
     def users(self, limit=None, after=None):
         """Returns an :class:`AsyncIterator` representing the users that have reacted to the message.
 
         The ``after`` parameter must represent a member
         and meet the :class:`abc.Snowflake` abc.
-
-        Parameters
-        ------------
-        limit: int
-            The maximum number of results to return.
-            If not provided, returns all the users who
-            reacted to the message.
-        after: :class:`abc.Snowflake`
-            For pagination, reactions are sorted by member.
-
-        Raises
-        --------
-        HTTPException
-            Getting the users for the reaction failed.
 
         Examples
         ---------
@@ -125,9 +139,23 @@ class Reaction:
         Flattening into a list: ::
 
             users = await reaction.users().flatten()
-            # users is now a list...
+            # users is now a list of User...
             winner = random.choice(users)
             await channel.send('{} has won the raffle.'.format(winner))
+
+        Parameters
+        ------------
+        limit: :class:`int`
+            The maximum number of results to return.
+            If not provided, returns all the users who
+            reacted to the message.
+        after: :class:`abc.Snowflake`
+            For pagination, reactions are sorted by member.
+
+        Raises
+        --------
+        HTTPException
+            Getting the users for the reaction failed.
 
         Yields
         --------

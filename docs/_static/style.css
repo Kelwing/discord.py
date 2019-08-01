@@ -23,7 +23,11 @@ p {
 
 div.document {
   margin: 10px auto 0 auto;
-  max-width: 940px; /* page width */
+  max-width: 1200px; /* page width */
+}
+
+div.body {
+  max-width: 960px;
 }
 
 div.documentwrapper {
@@ -32,7 +36,7 @@ div.documentwrapper {
 }
 
 div.bodywrapper {
-  margin: 0 0 0 220px; /* sidebar width */
+  margin: 0 0 0 240px; /* sidebar width */
 }
 
 div.body {
@@ -46,7 +50,7 @@ div.footer {
   font-size: 14px;
   margin: 20px auto 30px auto;
   text-align: right;
-  max-width: 880px;
+  max-width: 1200px; /* page width */
 }
 
 div.footer a {
@@ -64,7 +68,7 @@ div.sphinxsidebar {
   font-size: 14px;
   line-height: 1.5em;
   margin-left: -100%;
-  width: 220px; /* sidebar width */
+  width: 240px; /* sidebar width */
 }
 
 div.sphinxsidebarwrapper {
@@ -74,7 +78,7 @@ div.sphinxsidebarwrapper {
 
   /* sticky sidebar */
   position: fixed;
-  width: 220px; /* sidebar width */
+  width: 240px; /* sidebar width */
   height: 90%;
   overflow: hidden;
 }
@@ -291,6 +295,17 @@ dl.field-list > dt {
   font-weight: bold;
 }
 
+/* remove flex from field lists */
+dl.field-list {
+  display: block;
+}
+
+/* internal references are forced to bold for some reason */
+a.reference.internal > strong {
+  font-weight: unset;
+  font-family: monospace;
+}
+
 div.danger, div.error {
   background-color: #ffe4e4;
   border: 1px solid #f66;
@@ -320,6 +335,21 @@ div.helpful > p.admonition-title {
 
 div.helpful > p.admonition-title:after {
   content: unset;
+}
+
+/* exception hierarchy */
+
+.exception-hierarchy-content dd,
+.exception-hierarchy-content dl {
+  margin: 0px 2px;
+}
+
+.exception-hierarchy-content {
+  margin-left: 0.5em;
+}
+
+.exception-hierarchy-content ul {
+  list-style: '»' !important;
 }
 
 pre {
@@ -463,6 +493,11 @@ div#welcome-to-discord-py > h1 {
 .active {
   background-color: #dbdbdb;
   border-left: 5px solid #dbdbdb;
+}
+
+div.code-block-caption {
+  font-size: medium;
+  font-weight: bold;
 }
 
 @media screen and (max-width: 870px) {

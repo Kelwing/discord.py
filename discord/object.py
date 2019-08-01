@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -57,14 +57,17 @@ class Object(Hashable):
 
     Attributes
     -----------
-    id : :class:`str`
+    id: :class:`str`
         The ID of the object.
     """
 
     def __init__(self, id):
         self.id = id
 
+    def __repr__(self):
+        return '<Object id=%r>' % self.id
+
     @property
     def created_at(self):
-        """Returns the snowflake's creation time in UTC."""
+        """:class:`datetime.datetime`: Returns the snowflake's creation time in UTC."""
         return utils.snowflake_time(self.id)

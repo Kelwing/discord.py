@@ -38,9 +38,9 @@ are custom to the command extension module.
     A default one is provided (:meth:`.Bot.on_command_error`).
 
     :param ctx: The invocation context.
-    :type ctx: :class:`Context`
+    :type ctx: :class:`.Context`
     :param error: The error that was raised.
-    :type error: :class:`CommandError` derived
+    :type error: :class:`.CommandError` derived
 
 .. function:: on_command(ctx)
 
@@ -50,7 +50,7 @@ are custom to the command extension module.
     error or completes.
 
     :param ctx: The invocation context.
-    :type ctx: :class:`Context`
+    :type ctx: :class:`.Context`
 
 .. function:: on_command_completion(ctx)
 
@@ -60,7 +60,7 @@ are custom to the command extension module.
     passed and the user input it correctly.
 
     :param ctx: The invocation context.
-    :type ctx: :class:`Context`
+    :type ctx: :class:`.Context`
 
 .. _ext_commands_api_command:
 
@@ -81,15 +81,34 @@ Command
 .. autoclass:: discord.ext.commands.GroupMixin
     :members:
 
-.. _ext_commands_api_formatters:
+.. _ext_commands_api_cogs:
 
-Formatters
------------
+Cogs
+------
 
-.. autoclass:: discord.ext.commands.Paginator
+.. autoclass:: discord.ext.commands.Cog
     :members:
 
-.. autoclass:: discord.ext.commands.HelpFormatter
+.. autoclass:: discord.ext.commands.CogMeta
+    :members:
+
+.. _ext_commands_api_formatters:
+
+Help Commands
+-----------------
+
+.. autoclass:: discord.ext.commands.HelpCommand
+    :members:
+
+.. autoclass:: discord.ext.commands.DefaultHelpCommand
+    :members:
+    :exclude-members: send_bot_help, send_cog_help, send_group_help, send_command_help, prepare_help_command
+
+.. autoclass:: discord.ext.commands.MinimalHelpCommand
+    :members:
+    :exclude-members: send_bot_help, send_cog_help, send_group_help, send_command_help, prepare_help_command
+
+.. autoclass:: discord.ext.commands.Paginator
     :members:
 
 .. _ext_commands_api_checks:
@@ -115,6 +134,8 @@ Checks
 
 .. autofunction:: discord.ext.commands.guild_only
 
+.. autofunction:: discord.ext.commands.dm_only
+
 .. autofunction:: discord.ext.commands.is_owner
 
 .. autofunction:: discord.ext.commands.is_nsfw
@@ -129,10 +150,10 @@ Context
     :inherited-members:
     :exclude-members: history, typing
 
-    .. autocomethod:: discord.ext.commands.Context.history
+    .. automethod:: discord.ext.commands.Context.history
         :async-for:
 
-    .. autocomethod:: discord.ext.commands.Context.typing
+    .. automethod:: discord.ext.commands.Context.typing
         :async-with:
 
 .. _ext_commands_api_converters:
@@ -147,6 +168,9 @@ Converters
     :members:
 
 .. autoclass:: discord.ext.commands.UserConverter
+    :members:
+
+.. autoclass:: discord.ext.commands.MessageConverter
     :members:
 
 .. autoclass:: discord.ext.commands.TextChannelConverter
@@ -203,8 +227,8 @@ Converters
 
 .. _ext_commands_api_errors:
 
-Errors
--------
+Exceptions
+-----------
 
 .. autoexception:: discord.ext.commands.CommandError
     :members:
@@ -215,10 +239,25 @@ Errors
 .. autoexception:: discord.ext.commands.MissingRequiredArgument
     :members:
 
+.. autoexception:: discord.ext.commands.ArgumentParsingError
+    :members:
+
+.. autoexception:: discord.ext.commands.UnexpectedQuoteError
+    :members:
+
+.. autoexception:: discord.ext.commands.InvalidEndOfQuotedStringError
+    :members:
+
+.. autoexception:: discord.ext.commands.ExpectedClosingQuoteError
+    :members:
+
 .. autoexception:: discord.ext.commands.BadArgument
     :members:
 
 .. autoexception:: discord.ext.commands.BadUnionArgument
+    :members:
+
+.. autoexception:: discord.ext.commands.PrivateMessageOnly
     :members:
 
 .. autoexception:: discord.ext.commands.NoPrivateMessage
@@ -254,3 +293,75 @@ Errors
 .. autoexception:: discord.ext.commands.BotMissingPermissions
     :members:
 
+.. autoexception:: discord.ext.commands.MissingRole
+    :members:
+
+.. autoexception:: discord.ext.commands.BotMissingRole
+    :members:
+
+.. autoexception:: discord.ext.commands.MissingAnyRole
+    :members:
+
+.. autoexception:: discord.ext.commands.BotMissingAnyRole
+    :members:
+
+.. autoexception:: discord.ext.commands.NSFWChannelRequired
+    :members:
+
+.. autoexception:: discord.ext.commands.ExtensionError
+    :members:
+
+.. autoexception:: discord.ext.commands.ExtensionAlreadyLoaded
+    :members:
+
+.. autoexception:: discord.ext.commands.ExtensionNotLoaded
+    :members:
+
+.. autoexception:: discord.ext.commands.NoEntryPointError
+    :members:
+
+.. autoexception:: discord.ext.commands.ExtensionFailed
+    :members:
+
+.. autoexception:: discord.ext.commands.ExtensionNotFound
+    :members:
+
+
+Exception Hierarchy
++++++++++++++++++++++
+
+.. exception_hierarchy::
+
+    - :exc:`~.DiscordException`
+        - :exc:`~.commands.CommandError`
+            - :exc:`~.commands.ConversionError`
+            - :exc:`~.commands.UserInputError`
+                - :exc:`~.commands.MissingRequiredArgument`
+                - :exc:`~.commands.TooManyArguments`
+                - :exc:`~.commands.BadArgument`
+                - :exc:`~.commands.BadUnionArgument`
+                - :exc:`~.commands.ArgumentParsingError`
+                    - :exc:`~.commands.UnexpectedQuoteError`
+                    - :exc:`~.commands.InvalidEndOfQuotedStringError`
+                    - :exc:`~.commands.ExpectedClosingQuoteError`
+            - :exc:`~.commands.CommandNotFound`
+            - :exc:`~.commands.CheckFailure`
+                - :exc:`~.commands.PrivateMessageOnly`
+                - :exc:`~.commands.NoPrivateMessage`
+                - :exc:`~.commands.NotOwner`
+                - :exc:`~.commands.MissingPermissions`
+                - :exc:`~.commands.BotMissingPermissions`
+                - :exc:`~.commands.MissingRole`
+                - :exc:`~.commands.BotMissingRole`
+                - :exc:`~.commands.MissingAnyRole`
+                - :exc:`~.commands.BotMissingAnyRole`
+                - :exc:`~.commands.NSFWChannelRequired`
+            - :exc:`~.commands.DisabledCommand`
+            - :exc:`~.commands.CommandInvokeError`
+            - :exc:`~.commands.CommandOnCooldown`
+        - :exc:`~.commands.ExtensionError`
+            - :exc:`~.commands.ExtensionAlreadyLoaded`
+            - :exc:`~.commands.ExtensionNotLoaded`
+            - :exc:`~.commands.NoEntryPointError`
+            - :exc:`~.commands.ExtensionFailed`
+            - :exc:`~.commands.ExtensionNotFound`

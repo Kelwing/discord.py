@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -28,11 +28,11 @@ import asyncio
 from collections import deque, namedtuple, OrderedDict
 import copy
 import datetime
-import enum
 import itertools
 import logging
 import math
 import weakref
+import inspect
 
 from .guild import Guild
 from .activity import _ActivityTag
@@ -44,12 +44,14 @@ from .channel import *
 from .raw_models import *
 from .member import Member
 from .role import Role
-from .enums import ChannelType, try_enum, Status
+from .enums import ChannelType, try_enum, Status, Enum
 from . import utils
 from .embeds import Embed
+from .object import Object
 
-class ListenerType(enum.Enum):
+class ListenerType(Enum):
     chunk = 0
+    query_members = 1
 
 Listener = namedtuple('Listener', ('type', 'future', 'predicate'))
 log = logging.getLogger(__name__)
@@ -69,6 +71,9 @@ class ConnectionState:
         self._ready_task = None
         self._fetch_offline = options.get('fetch_offline_members', True)
         self.heartbeat_timeout = options.get('heartbeat_timeout', 60.0)
+        self.guild_subscriptions = options.get('guild_subscriptions', True)
+        # Only disable cache if both fetch_offline and guild_subscriptions are off.
+        self._cache_members = (self._fetch_offline or self.guild_subscriptions)
         self._listeners = []
 
         activity = options.get('activity', None)
@@ -87,6 +92,11 @@ class ConnectionState:
 
         self._activity = activity
         self._status = status
+
+        self.parsers = parsers = {}
+        for attr, func in inspect.getmembers(self):
+            if attr.startswith('parse_'):
+                parsers[attr[6:].upper()] = func
 
         self.clear()
 
@@ -243,7 +253,7 @@ class ConnectionState:
             self._private_channels_by_user.pop(channel.recipient.id, None)
 
     def _get_message(self, msg_id):
-        return utils.find(lambda m: m.id == msg_id, self._messages)
+        return utils.find(lambda m: m.id == msg_id, reversed(self._messages))
 
     def _add_guild_from_data(self, guild):
         guild = Guild(data=guild, state=self)
@@ -255,15 +265,16 @@ class ConnectionState:
             yield self.receive_chunk(guild.id)
 
     def _get_guild_channel(self, data):
+        channel_id = int(data['channel_id'])
         try:
             guild = self._get_guild(int(data['guild_id']))
         except KeyError:
-            channel = self.get_channel(int(data['channel_id']))
+            channel = self.get_channel(channel_id)
             guild = None
         else:
-            channel = guild and guild.get_channel(int(data['channel_id']))
+            channel = guild and guild.get_channel(channel_id)
 
-        return channel, guild
+        return channel or Object(id=channel_id), guild
 
     async def request_offline_members(self, guilds):
         # get all the chunks
@@ -282,6 +293,32 @@ class ConnectionState:
                 await utils.sane_wait_for(chunks, timeout=len(chunks) * 30.0, loop=self.loop)
             except asyncio.TimeoutError:
                 log.info('Somehow timed out waiting for chunks.')
+
+    async def query_members(self, guild, query, limit, cache):
+        guild_id = guild.id
+        ws = self._get_websocket(guild_id)
+        if ws is None:
+            raise RuntimeError('Somehow do not have a websocket for this guild_id')
+
+        # Limits over 1000 cannot be supported since
+        # the main use case for this is guild_subscriptions being disabled
+        # and they don't receive GUILD_MEMBER events which make computing
+        # member_count impossible. The only way to fix it is by limiting
+        # the limit parameter to 1 to 1000.
+        future = self.receive_member_query(guild_id, query)
+        try:
+            # start the query operation
+            await ws.request_chunks(guild_id, query, limit)
+            members = await asyncio.wait_for(future, timeout=5.0, loop=self.loop)
+
+            if cache:
+                for member in members:
+                    guild._add_member(member)
+
+            return members
+        except asyncio.TimeoutError:
+            log.info('Timed out waiting for chunks with query %r and limit %d for guild_id %d', query, limit, guild_id)
+            raise
 
     async def _delay_ready(self):
         try:
@@ -330,7 +367,8 @@ class ConnectionState:
 
         self._ready_state = ReadyState(launch=asyncio.Event(), guilds=[])
         self.clear()
-        self.user = ClientUser(state=self, data=data['user'])
+        self.user = user = ClientUser(state=self, data=data['user'])
+        self._users[user.id] = user
 
         guilds = self._ready_state.guilds
         for guild_data in data['guilds']:
@@ -344,11 +382,11 @@ class ConnectionState:
             except KeyError:
                 continue
             else:
-                self.user._relationships[r_id] = Relationship(state=self, data=relationship)
+                user._relationships[r_id] = Relationship(state=self, data=relationship)
 
         for pm in data.get('private_channels', []):
             factory, _ = _channel_factory(pm['type'])
-            self._add_private_channel(factory(me=self.user, data=pm, state=self))
+            self._add_private_channel(factory(me=user, data=pm, state=self))
 
         self.dispatch('connect')
         self._ready_task = asyncio.ensure_future(self._delay_ready(), loop=self.loop)
@@ -361,46 +399,44 @@ class ConnectionState:
         message = Message(channel=channel, data=data, state=self)
         self.dispatch('message', message)
         self._messages.append(message)
+        if channel and channel.__class__ is TextChannel:
+            channel.last_message_id = message.id
 
     def parse_message_delete(self, data):
         raw = RawMessageDeleteEvent(data)
-        self.dispatch('raw_message_delete', raw)
-
         found = self._get_message(raw.message_id)
+        raw.cached_message = found
+        self.dispatch('raw_message_delete', raw)
         if found is not None:
             self.dispatch('message_delete', found)
             self._messages.remove(found)
 
     def parse_message_delete_bulk(self, data):
         raw = RawBulkMessageDeleteEvent(data)
+        found_messages = [message for message in self._messages if message.id in raw.message_ids]
+        raw.cached_messages = found_messages
         self.dispatch('raw_bulk_message_delete', raw)
-
-        to_be_deleted = [message for message in self._messages if message.id in raw.message_ids]
-        for msg in to_be_deleted:
-            self.dispatch('message_delete', msg)
-            self._messages.remove(msg)
+        if found_messages:
+            self.dispatch('bulk_message_delete', found_messages)
+            for msg in found_messages:
+                self._messages.remove(msg)
 
     def parse_message_update(self, data):
         raw = RawMessageUpdateEvent(data)
-        self.dispatch('raw_message_edit', raw)
         message = self._get_message(raw.message_id)
         if message is not None:
             older_message = copy.copy(message)
-            if 'call' in data:
-                # call state message edit
-                message._handle_call(data['call'])
-            elif 'content' not in data:
-                # embed only edit
-                message.embeds = [Embed.from_data(d) for d in data['embeds']]
-            else:
-                message._update(channel=message.channel, data=data)
-
+            raw.cached_message = older_message
+            self.dispatch('raw_message_edit', raw)
+            message._update(data)
             self.dispatch('message_edit', older_message, message)
+        else:
+            self.dispatch('raw_message_edit', raw)
 
     def parse_message_reaction_add(self, data):
         emoji_data = data['emoji']
         emoji_id = utils._get_as_snowflake(emoji_data, 'id')
-        emoji = PartialEmoji(animated=emoji_data['animated'], id=emoji_id, name=emoji_data['name'])
+        emoji = PartialEmoji.with_state(self, animated=emoji_data['animated'], id=emoji_id, name=emoji_data['name'])
         raw = RawReactionActionEvent(data, emoji)
         self.dispatch('raw_reaction_add', raw)
 
@@ -426,7 +462,7 @@ class ConnectionState:
     def parse_message_reaction_remove(self, data):
         emoji_data = data['emoji']
         emoji_id = utils._get_as_snowflake(emoji_data, 'id')
-        emoji = PartialEmoji(animated=emoji_data['animated'], id=emoji_id, name=emoji_data['name'])
+        emoji = PartialEmoji.with_state(self, animated=emoji_data['animated'], id=emoji_id, name=emoji_data['name'])
         raw = RawReactionActionEvent(data, emoji)
         self.dispatch('raw_reaction_remove', raw)
 
@@ -458,15 +494,18 @@ class ConnectionState:
                 # skip these useless cases.
                 return
 
-            member = Member(guild=guild, data=data, state=self)
+            member, old_member = Member._from_presence_update(guild=guild, data=data, state=self)
             guild._add_member(member)
+        else:
+            old_member = Member._copy(member)
+            user_update = member._presence_update(data=data, user=user)
+            if user_update:
+                self.dispatch('user_update', user_update[0], user_update[1])
 
-        old_member = Member._copy(member)
-        member._presence_update(data=data, user=user)
         self.dispatch('member_update', old_member, member)
 
     def parse_user_update(self, data):
-        self.user = ClientUser(state=self, data=data)
+        self.user._update(data)
 
     def parse_channel_delete(self, data):
         guild = self._get_guild(utils._get_as_snowflake(data, 'guild_id'))
@@ -532,7 +571,6 @@ class ConnectionState:
                 log.warning('CHANNEL_CREATE referencing an unknown guild ID: %s. Discarding.', guild_id)
                 return
 
-
     def parse_channel_pins_update(self, data):
         channel_id = int(data['channel_id'])
         channel = self.get_channel(channel_id)
@@ -575,7 +613,8 @@ class ConnectionState:
             return
 
         member = Member(guild=guild, data=data, state=self)
-        guild._add_member(member)
+        if self._cache_members:
+            guild._add_member(member)
         guild._member_count += 1
         self.dispatch('member_join', member)
 
@@ -602,7 +641,7 @@ class ConnectionState:
         member = guild.get_member(user_id)
         if member is not None:
             old_member = copy.copy(member)
-            member._update(data, user)
+            member._update(data)
             self.dispatch('member_update', old_member, member)
         else:
             log.warning('GUILD_MEMBER_UPDATE referencing an unknown member ID: %s. Discarding.', user_id)
@@ -780,20 +819,29 @@ class ConnectionState:
     def parse_guild_members_chunk(self, data):
         guild_id = int(data['guild_id'])
         guild = self._get_guild(guild_id)
-        members = data.get('members', [])
-        for member in members:
-            m = Member(guild=guild, data=member, state=self)
-            existing = guild.get_member(m.id)
-            if existing is None or existing.joined_at is None:
-                guild._add_member(m)
-
+        members = [Member(guild=guild, data=member, state=self) for member in data.get('members', [])]
         log.info('Processed a chunk for %s members in guild ID %s.', len(members), guild_id)
+        if self._cache_members:
+            for member in members:
+                guild._add_member(member)
+
         self.process_listeners(ListenerType.chunk, guild, len(members))
+        names = [x.name.lower() for x in members]
+        self.process_listeners(ListenerType.query_members, (guild_id, names), members)
+
+    def parse_guild_integrations_update(self, data):
+        guild = self._get_guild(int(data['guild_id']))
+        if guild is not None:
+            self.dispatch('guild_integrations_update', guild)
+        else:
+            log.warning('GUILD_INTEGRATIONS_UPDATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
 
     def parse_webhooks_update(self, data):
         channel = self.get_channel(int(data['channel_id']))
-        if channel:
+        if channel is not None:
             self.dispatch('webhooks_update', channel)
+        else:
+            log.warning('WEBHOOKS_UPDATE referencing an unknown channel ID: %s. Discarding.', data['channel_id'])
 
     def parse_voice_state_update(self, data):
         guild = self._get_guild(utils._get_as_snowflake(data, 'guild_id'))
@@ -909,6 +957,15 @@ class ConnectionState:
         self._listeners.append(listener)
         return future
 
+    def receive_member_query(self, guild_id, query):
+        def predicate(args, *, guild_id=guild_id, query=query.lower()):
+            request_guild_id, names = args
+            return request_guild_id == guild_id and all(n.startswith(query) for n in names)
+        future = self.loop.create_future()
+        listener = Listener(ListenerType.query_members, future, predicate)
+        self._listeners.append(listener)
+        return future
+
 class AutoShardedConnectionState(ConnectionState):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -979,7 +1036,8 @@ class AutoShardedConnectionState(ConnectionState):
         if not hasattr(self, '_ready_state'):
             self._ready_state = ReadyState(launch=asyncio.Event(), guilds=[])
 
-        self.user = ClientUser(state=self, data=data['user'])
+        self.user = user = ClientUser(state=self, data=data['user'])
+        self._users[user.id] = user
 
         guilds = self._ready_state.guilds
         for guild_data in data['guilds']:
@@ -989,7 +1047,7 @@ class AutoShardedConnectionState(ConnectionState):
 
         for pm in data.get('private_channels', []):
             factory, _ = _channel_factory(pm['type'])
-            self._add_private_channel(factory(me=self.user, data=pm, state=self))
+            self._add_private_channel(factory(me=user, data=pm, state=self))
 
         self.dispatch('connect')
         if self._ready_task is None:

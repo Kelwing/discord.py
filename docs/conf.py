@@ -31,28 +31,34 @@ sys.path.append(os.path.abspath('extensions'))
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    'builder',
     'sphinx.ext.autodoc',
     'sphinx.ext.extlinks',
     'sphinx.ext.intersphinx',
     'sphinx.ext.napoleon',
-    'sphinxcontrib.asyncio',
-    'details'
+    'sphinxcontrib_trio',
+    'details',
+    'exception_hierarchy'
 ]
 
 autodoc_member_order = 'bysource'
 
 extlinks = {
-    'issue': ('https://github.com/Rapptz/discord.py/issues/%s', 'issue '),
+    'issue': ('https://github.com/Rapptz/discord.py/issues/%s', 'GH-'),
 }
 
 # Links used for cross-referencing stuff in other documentation
-intersphinx_mapping = {'py': ('https://docs.python.org/3', None)}
+intersphinx_mapping = {
+  'py': ('https://docs.python.org/3', None),
+  'aio': ('https://aiohttp.readthedocs.io/en/stable/', None),
+  'req': ('http://docs.python-requests.org/en/latest/', 'requests.inv')
+}
 
 rst_prolog = """
-.. |coro| replace:: This function is a |corourl|_.
-.. |maybecoro| replace:: This function *could be a* |corourl|_.
-.. |corourl| replace:: *coroutine*
-.. _corourl: https://docs.python.org/3/library/asyncio-task.html#coroutine
+.. |coro| replace:: This function is a |coroutine_link|_.
+.. |maybecoro| replace:: This function *could be a* |coroutine_link|_.
+.. |coroutine_link| replace:: *coroutine*
+.. _coroutine_link: https://docs.python.org/3/library/asyncio-task.html#coroutine
 """
 
 # Add any paths that contain templates here, relative to this directory.
@@ -69,7 +75,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'discord.py'
-copyright = u'2015-2017, Rapptz'
+copyright = u'2015-2019, Rapptz'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -225,7 +231,7 @@ html_static_path = ['_static']
 
 # The name of a javascript file (relative to the configuration directory) that
 # implements a search results scorer. If empty, the default will be used.
-#html_search_scorer = 'scorer.js'
+html_search_scorer = '_static/scorer.js'
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = 'discord.pydoc'

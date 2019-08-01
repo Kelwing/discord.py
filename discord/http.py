@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -89,7 +89,7 @@ class HTTPClient:
     def __init__(self, connector=None, *, proxy=None, proxy_auth=None, loop=None):
         self.loop = asyncio.get_event_loop() if loop is None else loop
         self.connector = connector
-        self._session = aiohttp.ClientSession(connector=connector, loop=self.loop)
+        self.__session = None # filled in static_login
         self._locks = weakref.WeakValueDictionary()
         self._global_over = asyncio.Event(loop=self.loop)
         self._global_over.set()
@@ -102,10 +102,10 @@ class HTTPClient:
         self.user_agent = user_agent.format(__version__, sys.version_info, aiohttp.__version__)
 
     def recreate(self):
-        if self._session.closed:
-            self._session = aiohttp.ClientSession(connector=self.connector, loop=self.loop)
+        if self.__session.closed:
+            self.__session = aiohttp.ClientSession(connector=self.connector, loop=self.loop)
 
-    async def request(self, route, *, header_bypass_delay=None, **kwargs):
+    async def request(self, route, *, files=None, header_bypass_delay=None, **kwargs):
         bucket = route.bucket
         method = route.method
         url = route.url
@@ -148,10 +148,14 @@ class HTTPClient:
             # wait until the global lock is complete
             await self._global_over.wait()
 
-        await lock
+        await lock.acquire()
         with MaybeUnlock(lock) as maybe_lock:
             for tries in range(5):
-                async with self._session.request(method, url, **kwargs) as r:
+                if files:
+                    for f in files:
+                        f.reset(seek=tries)
+
+                async with self.__session.request(method, url, **kwargs) as r:
                     log.debug('%s %s with %s has returned %s', method, url, kwargs.get('data'), r.status)
 
                     # even errors have text involved in them so this is safe to call
@@ -177,6 +181,10 @@ class HTTPClient:
 
                     # we are being rate limited
                     if r.status == 429:
+                        if not isinstance(data, dict):
+                            # Banned by Cloudflare more than likely.
+                            raise HTTPException(r, data)
+
                         fmt = 'We are being rate limited. Retrying in %.2f seconds. Handled under the bucket "%s"'
 
                         # sleep a bit
@@ -216,21 +224,22 @@ class HTTPClient:
             # We've run out of retries, raise.
             raise HTTPException(r, data)
 
-    async def get_attachment(self, url):
-        async with self._session.get(url) as resp:
+    async def get_from_cdn(self, url):
+        async with self.__session.get(url) as resp:
             if resp.status == 200:
                 return await resp.read()
             elif resp.status == 404:
-                raise NotFound(resp, 'attachment not found')
+                raise NotFound(resp, 'asset not found')
             elif resp.status == 403:
-                raise Forbidden(resp, 'cannot retrieve attachment')
+                raise Forbidden(resp, 'cannot retrieve asset')
             else:
-                raise HTTPException(resp, 'failed to get attachment')
+                raise HTTPException(resp, 'failed to get asset')
 
     # state management
 
     async def close(self):
-        await self._session.close()
+        if self.__session:
+            await self.__session.close()
 
     def _token(self, token, *, bot=True):
         self.token = token
@@ -240,6 +249,8 @@ class HTTPClient:
     # login management
 
     async def static_login(self, token, *, bot):
+        # Necessary to get aiohttp to stop complaining about session creation
+        self.__session = aiohttp.ClientSession(connector=self.connector, loop=self.loop)
         old_token, old_bot = self.token, self.bot_token
         self._token(token, bot=bot)
 
@@ -331,13 +342,13 @@ class HTTPClient:
 
         form.add_field('payload_json', utils.to_json(payload))
         if len(files) == 1:
-            fp = files[0]
-            form.add_field('file', fp[0], filename=fp[1], content_type='application/octet-stream')
+            file = files[0]
+            form.add_field('file', file.fp, filename=file.filename, content_type='application/octet-stream')
         else:
-            for index, (buffer, filename) in enumerate(files):
-                form.add_field('file%s' % index, buffer, filename=filename, content_type='application/octet-stream')
+            for index, file in enumerate(files):
+                form.add_field('file%s' % index, file.fp, filename=file.filename, content_type='application/octet-stream')
 
-        return self.request(r, data=form)
+        return self.request(r, data=form, files=files)
 
     async def ack_message(self, channel_id, message_id):
         r = Route('POST', '/channels/{channel_id}/messages/{message_id}/ack', channel_id=channel_id, message_id=message_id)
@@ -359,26 +370,32 @@ class HTTPClient:
 
         return self.request(r, json=payload, reason=reason)
 
-    def edit_message(self, message_id, channel_id, **fields):
+    def edit_message(self, channel_id, message_id, **fields):
         r = Route('PATCH', '/channels/{channel_id}/messages/{message_id}', channel_id=channel_id, message_id=message_id)
         return self.request(r, json=fields)
 
-    def add_reaction(self, message_id, channel_id, emoji):
+    def suppress_message_embeds(self, channel_id, message_id, *, suppress):
+        payload = { 'suppress': suppress }
+        r = Route('POST', '/channels/{channel_id}/messages/{message_id}/suppress-embeds',
+                  channel_id=channel_id, message_id=message_id)
+        return self.request(r, json=payload)
+
+    def add_reaction(self, channel_id, message_id, emoji):
         r = Route('PUT', '/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me',
                   channel_id=channel_id, message_id=message_id, emoji=emoji)
         return self.request(r, header_bypass_delay=0.25)
 
-    def remove_reaction(self, message_id, channel_id, emoji, member_id):
+    def remove_reaction(self, channel_id, message_id, emoji, member_id):
         r = Route('DELETE', '/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/{member_id}',
                   channel_id=channel_id, message_id=message_id, member_id=member_id, emoji=emoji)
         return self.request(r, header_bypass_delay=0.25)
 
-    def remove_own_reaction(self, message_id, channel_id, emoji):
+    def remove_own_reaction(self, channel_id, message_id, emoji):
         r = Route('DELETE', '/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me',
                   channel_id=channel_id, message_id=message_id, emoji=emoji)
         return self.request(r, header_bypass_delay=0.25)
 
-    def get_reaction_users(self, message_id, channel_id, emoji, limit, after=None):
+    def get_reaction_users(self, channel_id, message_id, emoji, limit, after=None):
         r = Route('GET', '/channels/{channel_id}/messages/{message_id}/reactions/{emoji}',
                   channel_id=channel_id, message_id=message_id, emoji=emoji)
 
@@ -387,7 +404,7 @@ class HTTPClient:
             params['after'] = after
         return self.request(r, params=params)
 
-    def clear_reactions(self, message_id, channel_id):
+    def clear_reactions(self, channel_id, message_id):
         r = Route('DELETE', '/channels/{channel_id}/messages/{message_id}/reactions',
                   channel_id=channel_id, message_id=message_id)
 
@@ -397,16 +414,20 @@ class HTTPClient:
         r = Route('GET', '/channels/{channel_id}/messages/{message_id}', channel_id=channel_id, message_id=message_id)
         return self.request(r)
 
+    def get_channel(self, channel_id):
+        r = Route('GET', '/channels/{channel_id}', channel_id=channel_id)
+        return self.request(r)
+
     def logs_from(self, channel_id, limit, before=None, after=None, around=None):
         params = {
             'limit': limit
         }
 
-        if before:
+        if before is not None:
             params['before'] = before
-        if after:
+        if after is not None:
             params['after'] = after
-        if around:
+        if around is not None:
             params['around'] = around
 
         return self.request(Route('GET', '/channels/{channel_id}/messages', channel_id=channel_id), params=params)
@@ -508,17 +529,16 @@ class HTTPClient:
         r = Route('PATCH', '/guilds/{guild_id}/channels', guild_id=guild_id)
         return self.request(r, json=data, reason=reason)
 
-    def create_channel(self, guild_id, name, channel_type, parent_id=None, permission_overwrites=None, *, reason=None):
+    def create_channel(self, guild_id, channel_type, *, reason=None, **options):
         payload = {
-            'name': name,
             'type': channel_type
         }
 
-        if permission_overwrites is not None:
-            payload['permission_overwrites'] = permission_overwrites
-
-        if parent_id is not None:
-            payload['parent_id'] = parent_id
+        valid_keys = ('name', 'parent_id', 'topic', 'bitrate', 'nsfw',
+                      'user_limit', 'position', 'permission_overwrites', 'rate_limit_per_user')
+        payload.update({
+            k: v for k, v in options.items() if k in valid_keys and v is not None
+        })
 
         return self.request(Route('POST', '/guilds/{guild_id}/channels', guild_id=guild_id), json=payload, reason=reason)
 
@@ -527,14 +547,15 @@ class HTTPClient:
 
     # Webhook management
 
-    def create_webhook(self, channel_id, *, name, avatar=None):
+    def create_webhook(self, channel_id, *, name, avatar=None, reason=None):
         payload = {
             'name': name
         }
         if avatar is not None:
             payload['avatar'] = avatar
 
-        return self.request(Route('POST', '/channels/{channel_id}/webhooks', channel_id=channel_id), json=payload)
+        r = Route('POST', '/channels/{channel_id}/webhooks', channel_id=channel_id)
+        return self.request(r, json=payload, reason=reason)
 
     def channel_webhooks(self, channel_id):
         return self.request(Route('GET', '/channels/{channel_id}/webhooks', channel_id=channel_id))
@@ -547,8 +568,23 @@ class HTTPClient:
 
     # Guild management
 
+    def get_guilds(self, limit, before=None, after=None):
+        params = {
+            'limit': limit
+        }
+
+        if before:
+            params['before'] = before
+        if after:
+            params['after'] = after
+
+        return self.request(Route('GET', '/users/@me/guilds'), params=params)
+
     def leave_guild(self, guild_id):
         return self.request(Route('DELETE', '/users/@me/guilds/{guild_id}', guild_id=guild_id))
+
+    def get_guild(self, guild_id):
+        return self.request(Route('GET', '/guilds/{guild_id}', guild_id=guild_id))
 
     def delete_guild(self, guild_id):
         return self.request(Route('DELETE', '/guilds/{guild_id}', guild_id=guild_id))
@@ -566,7 +602,8 @@ class HTTPClient:
         valid_keys = ('name', 'region', 'icon', 'afk_timeout', 'owner_id',
                       'afk_channel_id', 'splash', 'verification_level',
                       'system_channel_id', 'default_message_notifications',
-                      'explicit_content_filter')
+                      'description', 'explicit_content_filter', 'banner',
+                      'system_channel_flags')
 
         payload = {
             k: v for k, v in fields.items() if k in valid_keys
@@ -587,9 +624,26 @@ class HTTPClient:
         payload = {'code': code}
         return self.request(Route('PATCH', '/guilds/{guild_id}/vanity-url', guild_id=guild_id), json=payload, reason=reason)
 
-    def prune_members(self, guild_id, days, *, reason=None):
+    def get_all_guild_channels(self, guild_id):
+        return self.request(Route('GET', '/guilds/{guild_id}/channels', guild_id=guild_id))
+
+    def get_members(self, guild_id, limit, after):
         params = {
-            'days': days
+            'limit': limit,
+        }
+        if after:
+            params['after'] = after
+
+        r = Route('GET', '/guilds/{guild_id}/members', guild_id=guild_id)
+        return self.request(r, params=params)
+
+    def get_member(self, guild_id, member_id):
+        return self.request(Route('GET', '/guilds/{guild_id}/members/{member_id}', guild_id=guild_id, member_id=member_id))
+
+    def prune_members(self, guild_id, days, compute_prune_count, *, reason=None):
+        params = {
+            'days': days,
+            'compute_prune_count': 'true' if compute_prune_count else 'false'
         }
         return self.request(Route('POST', '/guilds/{guild_id}/prune', guild_id=guild_id), params=params, reason=reason)
 
@@ -598,6 +652,12 @@ class HTTPClient:
             'days': days
         }
         return self.request(Route('GET', '/guilds/{guild_id}/prune', guild_id=guild_id), params=params)
+
+    def get_all_custom_emojis(self, guild_id):
+        return self.request(Route('GET', '/guilds/{guild_id}/emojis', guild_id=guild_id))
+
+    def get_custom_emoji(self, guild_id, emoji_id):
+        return self.request(Route('GET', '/guilds/{guild_id}/emojis/{emoji_id}', guild_id=guild_id, emoji_id=emoji_id))
 
     def create_custom_emoji(self, guild_id, name, image, *, roles=None, reason=None):
         payload = {
@@ -635,6 +695,9 @@ class HTTPClient:
         r = Route('GET', '/guilds/{guild_id}/audit-logs', guild_id=guild_id)
         return self.request(r, params=params)
 
+    def get_widget(self, guild_id):
+        return self.request(Route('GET', '/guilds/{guild_id}/widget.json', guild_id=guild_id))
+
     # Invite management
 
     def create_invite(self, channel_id, *, reason=None, **options):
@@ -648,9 +711,9 @@ class HTTPClient:
 
         return self.request(r, reason=reason, json=payload)
 
-    def get_invite(self, invite_id):
+    def get_invite(self, invite_id, *, with_counts=True):
         params = {
-            'with_counts': 'true'
+            'with_counts': int(with_counts)
         }
         return self.request(Route('GET', '/invite/{invite_id}', invite_id=invite_id), params=params)
 
@@ -664,6 +727,9 @@ class HTTPClient:
         return self.request(Route('DELETE', '/invite/{invite_id}', invite_id=invite_id), reason=reason)
 
     # Role management
+
+    def get_roles(self, guild_id):
+        return self.request(Route('GET', '/guilds/{guild_id}/roles', guild_id=guild_id))
 
     def edit_role(self, guild_id, role_id, *, reason=None, **fields):
         r = Route('PATCH', '/guilds/{guild_id}/roles/{role_id}', guild_id=guild_id, role_id=role_id)
@@ -767,7 +833,7 @@ class HTTPClient:
             value = '{0}?encoding={1}&v={2}'
         return data['shards'], value.format(data['url'], encoding, v)
 
-    def get_user_info(self, user_id):
+    def get_user(self, user_id):
         return self.request(Route('GET', '/users/{user_id}', user_id=user_id))
 
     def get_user_profile(self, user_id):
@@ -782,3 +848,6 @@ class HTTPClient:
 
     def leave_hypesquad_house(self):
         return self.request(Route('DELETE', '/hypesquad/online'))
+
+    def edit_settings(self, **payload):
+        return self.request(Route('PATCH', '/users/@me/settings'), json=payload)

@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -36,6 +36,9 @@ class _EmptyEmbed:
     def __repr__(self):
         return 'Embed.Empty'
 
+    def __len__(self):
+        return 0
+
 EmptyEmbed = _EmptyEmbed()
 
 class EmbedProxy:
@@ -54,12 +57,16 @@ class EmbedProxy:
 class Embed:
     """Represents a Discord embed.
 
-    The following attributes can be set during creation
-    of the object:
+    .. container:: operations
 
-    Certain properties return an ``EmbedProxy``. Which is a type
-    that acts similar to a regular :class:`dict` except access the attributes
-    via dotted access, e.g. ``embed.author.icon_url``. If the attribute
+        .. describe:: len(x)
+
+            Returns the total size of the embed.
+            Useful for checking if it's within the 6000 character limit.
+
+    Certain properties return an ``EmbedProxy``, a type
+    that acts similar to a regular :class:`dict` except using dotted access,
+    e.g. ``embed.author.icon_url``. If the attribute
     is invalid or empty, then a special sentinel value is returned,
     :attr:`Embed.Empty`.
 
@@ -70,16 +77,21 @@ class Embed:
     -----------
     title: :class:`str`
         The title of the embed.
+        This can be set during initialisation.
     type: :class:`str`
         The type of embed. Usually "rich".
+        This can be set during initialisation.
     description: :class:`str`
         The description of the embed.
+        This can be set during initialisation.
     url: :class:`str`
         The URL of the embed.
-    timestamp: `datetime.datetime`
+        This can be set during initialisation.
+    timestamp: :class:`datetime.datetime`
         The timestamp of the embed content. This could be a naive or aware datetime.
-    colour: :class:`Colour` or :class:`int`
+    colour: Union[:class:`Colour`, :class:`int`]
         The colour code of the embed. Aliased to ``color`` as well.
+        This can be set during initialisation.
     Empty
         A special sentinel value used by ``EmbedProxy`` and this class
         to denote that the value or attribute is empty.
@@ -112,7 +124,21 @@ class Embed:
             self.timestamp = timestamp
 
     @classmethod
-    def from_data(cls, data):
+    def from_dict(cls, data):
+        """Converts a :class:`dict` to a :class:`Embed` provided it is in the
+        format that Discord expects it to be in.
+
+        You can find out about this format in the `official Discord documentation`__.
+
+        .. _DiscordDocs: https://discordapp.com/developers/docs/resources/channel#embed-object
+
+        __ DiscordDocs_
+
+        Parameters
+        -----------
+        data: :class:`dict`
+            The dictionary to convert into an embed.
+        """
         # we are bypassing __init__ here since it doesn't apply here
         self = cls.__new__(cls)
 
@@ -144,6 +170,31 @@ class Embed:
                 setattr(self, '_' + attr, value)
 
         return self
+
+    def copy(self):
+        """Returns a shallow copy of the embed."""
+        return Embed.from_dict(self.to_dict())
+
+    def __len__(self):
+        total = len(self.title) + len(self.description)
+        for field in getattr(self, '_fields', []):
+            total += len(field['name']) + len(field['value'])
+
+        try:
+            footer = self._footer
+        except AttributeError:
+            pass
+        else:
+            total += len(footer['text'])
+
+        try:
+            author = self._author
+        except AttributeError:
+            pass
+        else:
+            total += len(author['name'])
+
+        return total
 
     @property
     def colour(self):
@@ -189,9 +240,9 @@ class Embed:
 
         Parameters
         -----------
-        text: str
+        text: :class:`str`
             The footer text.
-        icon_url: str
+        icon_url: :class:`str`
             The URL of the footer icon. Only HTTP(S) is supported.
         """
 
@@ -227,7 +278,7 @@ class Embed:
 
         Parameters
         -----------
-        url: str
+        url: :class:`str`
             The source URL for the image. Only HTTP(S) is supported.
         """
 
@@ -260,7 +311,7 @@ class Embed:
 
         Parameters
         -----------
-        url: str
+        url: :class:`str`
             The source URL for the thumbnail. Only HTTP(S) is supported.
         """
 
@@ -312,11 +363,11 @@ class Embed:
 
         Parameters
         -----------
-        name: str
+        name: :class:`str`
             The name of the author.
-        url: str
+        url: :class:`str`
             The URL for the author.
-        icon_url: str
+        icon_url: :class:`str`
             The URL of the author icon. Only HTTP(S) is supported.
         """
 
@@ -350,11 +401,11 @@ class Embed:
 
         Parameters
         -----------
-        name: str
+        name: :class:`str`
             The name of the field.
-        value: str
+        value: :class:`str`
             The value of the field.
-        inline: bool
+        inline: :class:`bool`
             Whether the field should be displayed inline.
         """
 
@@ -366,6 +417,39 @@ class Embed:
 
         try:
             self._fields.append(field)
+        except AttributeError:
+            self._fields = [field]
+
+        return self
+   
+    def insert_field_at(self, index, *, name, value, inline=True):
+        """Inserts a field before a specified index to the embed.
+        
+        This function returns the class instance to allow for fluent-style
+        chaining.
+        
+        .. versionadded:: 1.2.0
+        
+        Parameters
+        -----------
+        index: :class:`int`
+            The index of where to insert the field.
+        name: :class:`str`
+            The name of the field.
+        value: :class:`str`
+            The value of the field.
+        inline: :class:`bool`
+            Whether the field should be displayed inline.
+        """
+
+        field = {
+            'inline': inline,
+            'name': str(name),
+            'value': str(value)
+        }
+
+        try:
+            self._fields.insert(index, field)
         except AttributeError:
             self._fields = [field]
 
@@ -391,7 +475,7 @@ class Embed:
 
         Parameters
         -----------
-        index: int
+        index: :class:`int`
             The index of the field to remove.
         """
         try:
@@ -409,13 +493,13 @@ class Embed:
 
         Parameters
         -----------
-        index: int
+        index: :class:`int`
             The index of the field to modify.
-        name: str
+        name: :class:`str`
             The name of the field.
-        value: str
+        value: :class:`str`
             The value of the field.
-        inline: bool
+        inline: :class:`bool`
             Whether the field should be displayed inline.
 
         Raises
@@ -460,7 +544,10 @@ class Embed:
             pass
         else:
             if timestamp:
-                result['timestamp'] = timestamp.isoformat()
+                if timestamp.tzinfo:
+                    result['timestamp'] = timestamp.astimezone(tz=datetime.timezone.utc).isoformat()
+                else:
+                    result['timestamp'] = timestamp.replace(tzinfo=datetime.timezone.utc).isoformat()
 
         # add in the non raw attribute ones
         if self.type:

@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 c_int_ptr = ctypes.POINTER(ctypes.c_int)
 c_int16_ptr = ctypes.POINTER(ctypes.c_int16)
 c_float_ptr = ctypes.POINTER(ctypes.c_float)
+
+_lib = None
 
 class EncoderStruct(ctypes.Structure):
     pass
@@ -100,48 +102,54 @@ def libopus_loader(name):
 
     return lib
 
-try:
-    if sys.platform == 'win32':
-        _basedir = os.path.dirname(os.path.abspath(__file__))
-        _bitness = 'x64' if sys.maxsize > 2**32 else 'x86'
-        _filename = os.path.join(_basedir, 'bin', 'libopus-0.{}.dll'.format(_bitness))
-        _lib = libopus_loader(_filename)
-    else:
-        _lib = libopus_loader(ctypes.util.find_library('opus'))
-except Exception:
-    _lib = None
+def _load_default():
+    global _lib
+    try:
+        if sys.platform == 'win32':
+            _basedir = os.path.dirname(os.path.abspath(__file__))
+            _bitness = 'x64' if sys.maxsize > 2**32 else 'x86'
+            _filename = os.path.join(_basedir, 'bin', 'libopus-0.{}.dll'.format(_bitness))
+            _lib = libopus_loader(_filename)
+        else:
+            _lib = libopus_loader(ctypes.util.find_library('opus'))
+    except Exception:
+        _lib = None
+
+    return _lib is not None
 
 def load_opus(name):
     """Loads the libopus shared library for use with voice.
 
     If this function is not called then the library uses the function
-    `ctypes.util.find_library`__ and then loads that one
-    if available.
+    :func:`ctypes.util.find_library` and then loads that one if available.
 
-    .. _find library: https://docs.python.org/3.5/library/ctypes.html#finding-shared-libraries
-    __ `find library`_
-
-    Not loading a library leads to voice not working.
+    Not loading a library and attempting to use PCM based AudioSources will
+    lead to voice not working.
 
     This function propagates the exceptions thrown.
 
-    Warning
-    --------
-    The bitness of the library must match the bitness of your python
-    interpreter. If the library is 64-bit then your python interpreter
-    must be 64-bit as well. Usually if there's a mismatch in bitness then
-    the load will throw an exception.
+    .. warning::
 
-    Note
-    ----
-    On Windows, the .dll extension is not necessary. However, on Linux
-    the full extension is required to load the library, e.g. ``libopus.so.1``.
-    On Linux however, `find library`_ will usually find the library automatically
-    without you having to call this.
+        The bitness of the library must match the bitness of your python
+        interpreter. If the library is 64-bit then your python interpreter
+        must be 64-bit as well. Usually if there's a mismatch in bitness then
+        the load will throw an exception.
+
+    .. note::
+
+        On Windows, this function should not need to be called as the binaries
+        are automatically loaded.
+
+    .. note::
+
+        On Windows, the .dll extension is not necessary. However, on Linux
+        the full extension is required to load the library, e.g. ``libopus.so.1``.
+        On Linux however, :func:`ctypes.util.find_library` will usually find the library automatically
+        without you having to call this.
 
     Parameters
     ----------
-    name: str
+    name: :class:`str`
         The filename of the shared library.
     """
     global _lib
@@ -149,13 +157,13 @@ def load_opus(name):
 
 def is_loaded():
     """Function to check if opus lib is successfully loaded either
-    via the ``ctypes.util.find_library`` call of :func:`load_opus`.
+    via the :func:`ctypes.util.find_library` call of :func:`load_opus`.
 
     This must return ``True`` for voice to work.
 
     Returns
     -------
-    bool
+    :class:`bool`
         Indicates if the opus library has been loaded.
     """
     global _lib
@@ -166,7 +174,7 @@ class OpusError(DiscordException):
 
     Attributes
     ----------
-    code : :class:`int`
+    code: :class:`int`
         The error code returned.
     """
 
@@ -219,7 +227,8 @@ class Encoder:
         self.application = application
 
         if not is_loaded():
-            raise OpusNotLoaded()
+            if not _load_default():
+                raise OpusNotLoaded()
 
         self._state = self._create_state()
         self.set_bitrate(128)
@@ -238,7 +247,7 @@ class Encoder:
         return _lib.opus_encoder_create(self.SAMPLING_RATE, self.CHANNELS, self.application, ctypes.byref(ret))
 
     def set_bitrate(self, kbps):
-        kbps = min(128, max(16, int(kbps)))
+        kbps = min(512, max(16, int(kbps)))
 
         _lib.opus_encoder_ctl(self._state, CTL_SET_BITRATE, kbps * 1024)
         return kbps

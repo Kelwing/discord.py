@@ -1,3 +1,5 @@
+.. _discord_ext_commands:
+
 ``discord.ext.commands`` -- Bot commands framework
 ====================================================
 
@@ -11,4 +13,6 @@ extension library that handles this for you.
     :maxdepth: 2
 
     commands
+    cogs
+    extensions
     api

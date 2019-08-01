@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -28,8 +28,14 @@ import datetime
 
 from .enums import ActivityType, try_enum
 from .colour import Colour
+from .utils import _get_as_snowflake
 
-__all__ = ['Activity', 'Streaming', 'Game', 'Spotify']
+__all__ = (
+    'Activity',
+    'Streaming',
+    'Game',
+    'Spotify',
+)
 
 """If curious, this is the current schema for an activity.
 
@@ -93,7 +99,7 @@ class Activity(_ActivityTag):
 
     Attributes
     ------------
-    application_id: :class:`str`
+    application_id: :class:`int`
         The application ID of the game.
     name: :class:`str`
         The name of the activity.
@@ -138,13 +144,25 @@ class Activity(_ActivityTag):
         self.timestamps = kwargs.pop('timestamps', {})
         self.assets = kwargs.pop('assets', {})
         self.party = kwargs.pop('party', {})
-        self.application_id = kwargs.pop('application_id', None)
+        self.application_id = _get_as_snowflake(kwargs, 'application_id')
         self.name = kwargs.pop('name', None)
         self.url = kwargs.pop('url', None)
         self.flags = kwargs.pop('flags', 0)
         self.sync_id = kwargs.pop('sync_id', None)
         self.session_id = kwargs.pop('session_id', None)
         self.type = try_enum(ActivityType, kwargs.pop('type', -1))
+
+    def __repr__(self):
+        attrs = (
+            'type',
+            'name',
+            'url',
+            'details',
+            'application_id',
+            'session_id',
+        )
+        mapped = ' '.join('%s=%r' % (attr, getattr(self, attr)) for attr in attrs)
+        return '<Activity %s>' % mapped
 
     def to_dict(self):
         ret = {}
@@ -491,7 +509,8 @@ class Spotify:
         return 'Spotify'
 
     def __eq__(self, other):
-        return isinstance(other, Spotify) and other._session_id == self._session_id
+        return (isinstance(other, Spotify) and other._session_id == self._session_id
+                and other._sync_id == self._sync_id and other.start == self.start)
 
     def __ne__(self, other):
         return not self.__eq__(other)

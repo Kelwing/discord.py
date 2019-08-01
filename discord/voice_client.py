@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2017 Rapptz
+Copyright (c) 2015-2019 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -68,11 +68,10 @@ class VoiceClient:
 
     Warning
     --------
-    In order to play audio, you must have loaded the opus library
-    through :func:`opus.load_opus`.
-
-    If you don't do this then the library will not be able to
-    transmit audio.
+    In order to use PCM based AudioSources, you must have the opus library
+    installed on your system and loaded through :func:`opus.load_opus`.
+    Otherwise, your AudioSources must be opus encoded (e.g. using :class:`FFmpegOpusAudio`)
+    or the library will not be able to transmit audio.
 
     Attributes
     -----------
@@ -84,7 +83,7 @@ class VoiceClient:
         The endpoint we are connecting to.
     channel: :class:`abc.Connectable`
         The voice channel connected to.
-    loop
+    loop: :class:`asyncio.AbstractEventLoop`
         The event loop that the voice client is running on.
     """
     def __init__(self, state, timeout, channel):
@@ -100,16 +99,24 @@ class VoiceClient:
         self._state = state
         # this will be used in the AudioPlayer thread
         self._connected = threading.Event()
+
+        self._handshaking = False
+        self._handshake_check = asyncio.Lock(loop=self.loop)
         self._handshake_complete = asyncio.Event(loop=self.loop)
 
+        self.mode = None
         self._connections = 0
         self.sequence = 0
         self.timestamp = 0
         self._runner = None
         self._player = None
-        self.encoder = opus.Encoder()
+        self.encoder = None
 
     warn_nacl = not has_nacl
+    supported_modes = (
+        'xsalsa20_poly1305_suffix',
+        'xsalsa20_poly1305',
+    )
 
     @property
     def guild(self):
@@ -161,6 +168,12 @@ class VoiceClient:
             self._state._remove_voice_client(key_id)
 
     async def _create_socket(self, server_id, data):
+        async with self._handshake_check:
+            if self._handshaking:
+                log.info("Ignoring voice server update while handshake is in progress")
+                return
+            self._handshaking = True
+
         self._connected.clear()
         self.session_id = self.main_ws.session_id
         self.server_id = server_id
@@ -204,6 +217,7 @@ class VoiceClient:
 
         try:
             self.ws = await DiscordVoiceWebSocket.from_client(self)
+            self._handshaking = False
             self._connected.clear()
             while not hasattr(self, 'secret_key'):
                 await self.ws.poll_event()
@@ -227,7 +241,12 @@ class VoiceClient:
                 await self.ws.poll_event()
             except (ConnectionClosed, asyncio.TimeoutError) as exc:
                 if isinstance(exc, ConnectionClosed):
-                    if exc.code == 1000:
+                    # The following close codes are undocumented so I will document them here.
+                    # 1000 - normal closure (obviously)
+                    # 4014 - voice channel has been deleted.
+                    # 4015 - voice server has crashed
+                    if exc.code in (1000, 4014, 4015):
+                        log.info('Disconnecting from voice normally, close code %d.', exc.code)
                         await self.disconnect()
                         break
 
@@ -252,7 +271,7 @@ class VoiceClient:
 
         Disconnects this voice client from voice.
         """
-        if not force and not self._connected.is_set():
+        if not force and not self.is_connected():
             return
 
         self.stop()
@@ -281,28 +300,36 @@ class VoiceClient:
         await self.main_ws.voice_state(guild_id, channel.id)
 
     def is_connected(self):
-        """:class:`bool`: Indicates if the voice client is connected to voice."""
+        """Indicates if the voice client is connected to voice."""
         return self._connected.is_set()
 
     # audio related
 
     def _get_voice_packet(self, data):
         header = bytearray(12)
-        nonce = bytearray(24)
-        box = nacl.secret.SecretBox(bytes(self.secret_key))
 
-        # Formulate header
+        # Formulate rtp header
         header[0] = 0x80
         header[1] = 0x78
         struct.pack_into('>H', header, 2, self.sequence)
         struct.pack_into('>I', header, 4, self.timestamp)
         struct.pack_into('>I', header, 8, self.ssrc)
 
-        # Copy header to nonce's first 12 bytes
+        encrypt_packet = getattr(self, '_encrypt_' + self.mode)
+        return encrypt_packet(header, data)
+
+    def _encrypt_xsalsa20_poly1305(self, header, data):
+        box = nacl.secret.SecretBox(bytes(self.secret_key))
+        nonce = bytearray(24)
         nonce[:12] = header
 
-        # Encrypt and return the data
         return header + box.encrypt(bytes(data), bytes(nonce)).ciphertext
+
+    def _encrypt_xsalsa20_poly1305_suffix(self, header, data):
+        box = nacl.secret.SecretBox(bytes(self.secret_key))
+        nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+
+        return header + box.encrypt(bytes(data), nonce).ciphertext + nonce
 
     def play(self, source, *, after=None):
         """Plays an :class:`AudioSource`.
@@ -317,7 +344,7 @@ class VoiceClient:
         -----------
         source: :class:`AudioSource`
             The audio source we're reading from.
-        after
+        after: Callable[[:class:`Exception`], Any]
             The finalizer that is called after the stream is exhausted.
             All exceptions it throws are silently discarded. This function
             must have a single parameter, ``error``, that denotes an
@@ -328,10 +355,12 @@ class VoiceClient:
         ClientException
             Already playing audio or not connected.
         TypeError
-            source is not a :class:`AudioSource` or after is not a callable.
+            Source is not a :class:`AudioSource` or after is not a callable.
+        OpusNotLoaded
+            Source is not opus encoded and opus is not loaded.
         """
 
-        if not self._connected:
+        if not self.is_connected():
             raise ClientException('Not connected to voice.')
 
         if self.is_playing():
@@ -339,6 +368,9 @@ class VoiceClient:
 
         if not isinstance(source, AudioSource):
             raise TypeError('source must an AudioSource not {0.__class__.__name__}'.format(source))
+
+        if not self.encoder and not source.is_opus():
+            self.encoder = opus.Encoder()
 
         self._player = AudioPlayer(source, self, after=after)
         self._player.start()
@@ -392,16 +424,16 @@ class VoiceClient:
 
         Parameters
         ----------
-        data: bytes
+        data: :class:`bytes`
             The :term:`py:bytes-like object` denoting PCM or Opus voice data.
-        encode: bool
+        encode: :class:`bool`
             Indicates if ``data`` should be encoded into Opus.
 
         Raises
         -------
         ClientException
             You are not connected.
-        OpusError
+        opus.OpusError
             Encoding the data failed.
         """
 
@@ -416,4 +448,4 @@ class VoiceClient:
         except BlockingIOError:
             log.warning('A packet has been dropped (seq: %s, timestamp: %s)', self.sequence, self.timestamp)
 
-        self.checked_add('timestamp', self.encoder.SAMPLES_PER_FRAME, 4294967295)
+        self.checked_add('timestamp', opus.Encoder.SAMPLES_PER_FRAME, 4294967295)
